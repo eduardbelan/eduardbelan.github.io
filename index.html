@@ -1,24 +1,286 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Eduard Belan - Portfolio</title>
-  <link rel="stylesheet" href="name.css">
-</head>
-<body>
-  <svg viewBox="0 0 600 300">
-    <!-- Symbol-->
-    <symbol id="s-text">
-      <text text-anchor="middle" x="50%" y="50%" dy=".35em"style="font-size: 78px;">Eduard Belan</text>
-    </symbol>
-    <!-- Duplicate symbols-->
-    <use class="text" xlink:href="#s-text"></use>
-    <use class="text" xlink:href="#s-text"></use>
-    <use class="text" xlink:href="#s-text"></use>
-    <use class="text" xlink:href="#s-text"></use>
-    <use class="text" xlink:href="#s-text"></use>
-  </svg>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ÉCLAT List (Encrypted)</title>
+    <style>
+      :root {
+        --fg: #eaeaea;
+        --muted: #b8b8b8;
+        --bg: #0e0f12;
+        --line: rgba(255, 255, 255, 0.12);
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+          "Helvetica Neue", Arial;
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 10px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.95rem;
+        margin-bottom: 18px;
+      }
+      .pw-box {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 10px 0 20px;
+      }
+      .pw-box input {
+        flex: 1;
+        padding: 0.6rem 0.7rem;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #111218;
+        color: var(--fg);
+      }
+      .pw-box button {
+        padding: 0.6rem 0.9rem;
+        border-radius: 8px;
+        border: 0;
+        background: #2d6cdf;
+        color: white;
+        cursor: pointer;
+      }
+      .pw-box button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .error {
+        color: #ff7a7a;
+        margin: 8px 0 0;
+        display: none;
+      }
+
+      /* List */
+      ul {
+        list-style: none;
+        margin: 14px 0 60px;
+        padding: 0;
+        counter-reset: index;
+      }
+      li {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-top: 1px solid var(--line);
+      }
+      li:first-child {
+        border-top: 0;
+      }
+
+      .no {
+        font-weight: 700;
+        min-width: 68px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        background-image: linear-gradient(to bottom, aquamarine, orangered);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .no a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .go {
+        white-space: nowrap;
+      }
+      .go a {
+        color: #8ab4ff;
+        text-decoration: none;
+      }
+      .go a:hover {
+        text-decoration: underline;
+      }
+
+      .loading {
+        opacity: 0.7;
+      }
+      .footer {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>ÉCLAT Duftzwillinge</h1>
+      <div class="muted">
+        Gib das Passwort ein, um die verschlüsselte Liste zu laden.
+      </div>
+
+      <div class="pw-box">
+        <input
+          id="pw"
+          type="password"
+          placeholder="32-char password…"
+          autocomplete="current-password"
+        />
+        <button id="btn">Entschlüsseln</button>
+      </div>
+      <div id="err" class="error"></div>
+
+      <ul id="list"></ul>
+
+      <div class="footer">
+        Client-seitige Entschlüsselung (AES-GCM, PBKDF2-SHA256, 200k
+        Iterationen).
+      </div>
+    </div>
+
+    <script>
+      (async () => {
+        const encUrl = "eclat_pairs.json.enc"; // place the .enc file next to this HTML
+        const btn = document.getElementById("btn");
+        const pwInput = document.getElementById("pw");
+        const err = document.getElementById("err");
+        const list = document.getElementById("list");
+
+        function showError(msg) {
+          err.textContent = msg;
+          err.style.display = "block";
+        }
+        function clearError() {
+          err.textContent = "";
+          err.style.display = "none";
+        }
+
+        async function fetchEnc() {
+          const r = await fetch(encUrl, { cache: "no-store" });
+          if (!r.ok)
+            throw new Error("Encrypted file konnte nicht geladen werden.");
+          return new Uint8Array(await r.arrayBuffer());
+        }
+
+        // File layout: [salt(16) | nonce(12) | tag(16) | cipher(N)]
+        function splitParts(buf) {
+          if (buf.length < 44) throw new Error("Encrypted file zu klein.");
+          const salt = buf.slice(0, 16);
+          const iv = buf.slice(16, 28);
+          const tag = buf.slice(28, 44);
+          const ct = buf.slice(44);
+          // WebCrypto expects ciphertext||tag
+          const ctTag = new Uint8Array(ct.length + tag.length);
+          ctTag.set(ct, 0);
+          ctTag.set(tag, ct.length);
+          return { salt, iv, ctTag };
+        }
+
+        async function deriveKey(password, salt) {
+          const enc = new TextEncoder();
+          const baseKey = await crypto.subtle.importKey(
+            "raw",
+            enc.encode(password),
+            "PBKDF2",
+            false,
+            ["deriveKey"]
+          );
+          return crypto.subtle.deriveKey(
+            { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
+            baseKey,
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["decrypt"]
+          );
+        }
+
+        async function decryptJson(pw) {
+          const raw = await fetchEnc();
+          const { salt, iv, ctTag } = splitParts(raw);
+          const key = await deriveKey(pw, salt);
+          const pt = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv, tagLength: 128 },
+            key,
+            ctTag
+          );
+          return JSON.parse(new TextDecoder().decode(pt));
+        }
+
+        function render(items) {
+          list.innerHTML = "";
+          const frag = document.createDocumentFragment();
+
+          items.forEach((it) => {
+            const li = document.createElement("li");
+
+            const no = document.createElement("div");
+            no.className = "no";
+            const noLink = document.createElement("a");
+            noLink.href = it.Url;
+            noLink.target = "_blank";
+            noLink.rel = "noopener";
+            noLink.textContent = String(it.No).padStart(3, "0");
+            no.appendChild(noLink);
+
+            const title = document.createElement("div");
+            title.className = "title";
+            title.textContent = it.Original;
+
+            const go = document.createElement("div");
+            go.className = "go";
+            const a = document.createElement("a");
+            a.href = it.Url;
+            a.target = "_blank";
+            a.rel = "noopener";
+            a.textContent = "Link";
+            go.appendChild(a);
+
+            li.appendChild(no);
+            li.appendChild(title);
+            li.appendChild(go);
+            frag.appendChild(li);
+          });
+
+          list.appendChild(frag);
+        }
+
+        async function handleDecrypt() {
+          clearError();
+          btn.disabled = true;
+          list.classList.add("loading");
+          try {
+            const pw = pwInput.value.trim();
+            if (!pw) throw new Error("Bitte Passwort eingeben.");
+            const data = await decryptJson(pw);
+            if (!Array.isArray(data))
+              throw new Error("Ungültiges Datenformat.");
+            render(data);
+          } catch (e) {
+            console.error(e);
+            showError(e.message || "Entschlüsselung fehlgeschlagen.");
+            list.innerHTML = "";
+          } finally {
+            list.classList.remove("loading");
+            btn.disabled = false;
+          }
+        }
+
+        btn.addEventListener("click", handleDecrypt);
+        pwInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") handleDecrypt();
+        });
+      })();
+    </script>
+  </body>
 </html>
